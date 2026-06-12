@@ -1,0 +1,155 @@
+-- | Net settlement obligations between a clearing bank and Visa Treasury.
+--
+-- After clearing, every participant bank ends a settlement cycle with a single
+-- net position against Visa Treasury: it either pays Visa (net debtor) or is
+-- paid by Visa (net creditor). Each position is a bilateral
+-- `SettlementObligation` signed by both Visa Treasury and the bank, so no bank
+-- ever sees another bank's position — that privacy is what the tests prove.
+module Visa.Settlement.Obligation where
+
+import DA.List (dedup)
+
+import Visa.Settlement.Usdc
+
+-- | Direction of a bank's net position for the cycle.
+data Direction
+  = BankPays      -- ^ net debtor: the bank owes Visa Treasury
+  | BankReceives  -- ^ net creditor: Visa Treasury owes the bank
+  deriving (Eq, Show)
+
+-- | Visa Treasury proposes the netted position; the bank countersigns by
+-- accepting, producing a mutually signed `SettlementObligation`.
+template ObligationProposal
+  with
+    visaTreasury : Party
+    bank : Party
+    direction : Direction
+    amount : Decimal
+    cycleId : Text
+  where
+    signatory visaTreasury
+    observer bank
+    ensure amount > 0.0
+
+    choice Accept : ContractId SettlementObligation
+      controller bank
+      do create SettlementObligation with
+           visaTreasury; bank; direction; amount; cycleId
+           allocatedFunds = None
+           regulators = []
+
+    choice Withdraw : ()
+      controller visaTreasury
+      do pure ()
+
+-- | A bank's net position against Visa Treasury for one settlement cycle.
+template SettlementObligation
+  with
+    visaTreasury : Party
+    bank : Party
+    direction : Direction
+    amount : Decimal
+    cycleId : Text
+    -- | USDC earmarked by a net-debtor bank to cover this obligation.
+    allocatedFunds : Optional (ContractId UsdcHolding)
+    -- | Oversight parties granted visibility via `DiscloseToRegulator`.
+    regulators : [Party]
+  where
+    signatory visaTreasury, bank
+    observer regulators
+    ensure amount > 0.0
+
+    -- | A net-debtor bank earmarks USDC for settlement. The exact amount is
+    -- carved out of the given holding and disclosed to Visa Treasury so it
+    -- can be collected atomically during batch settlement. Re-allocation is
+    -- allowed (e.g. if a previous allocation was spent).
+    choice AllocateFunds : ContractId SettlementObligation
+      with
+        holdingCid : ContractId UsdcHolding
+      controller bank
+      do
+        assertMsg "only net-debtor (BankPays) obligations need funding"
+          (direction == BankPays)
+        (allocated, _remainder) <- exercise holdingCid Allocate with
+          allocateAmount = amount
+          discloseTo = [visaTreasury] ++ regulators
+        create this with allocatedFunds = Some allocated
+
+    -- | Grant a regulator visibility of this obligation. Exercised by Visa
+    -- Treasury; the bank's signature on the obligation authorizes the
+    -- re-creation with the extra observer.
+    choice DiscloseToRegulator : ContractId SettlementObligation
+      with
+        regulator : Party
+      controller visaTreasury
+      do create this with regulators = dedup (regulator :: regulators)
+
+    -- | Settlement leg for a net debtor: move the earmarked USDC from the
+    -- bank to Visa Treasury and issue a receipt. Only invoked from
+    -- `SettlementBatch.ExecuteSettlement`, never in isolation.
+    choice CollectFromBank : (ContractId UsdcHolding, ContractId SettlementReceipt)
+      controller visaTreasury
+      do
+        assertMsg "CollectFromBank only applies to BankPays obligations"
+          (direction == BankPays)
+        allocatedCid <- case allocatedFunds of
+          None -> abort ("bank has not allocated funds for cycle " <> cycleId)
+          Some cid -> pure cid
+        holding <- fetch allocatedCid
+        assertMsg "allocated holding must belong to the bank" (holding.owner == bank)
+        assertMsg "allocated holding must match the obligation amount"
+          (holding.amount == amount)
+        collected <- exercise allocatedCid Transfer with newOwner = visaTreasury
+        receipt <- issueReceipt this
+        pure (collected, receipt)
+
+    -- | Settlement leg for a net creditor: pay the bank out of Visa
+    -- Treasury's settlement pool. Returns the remaining pool (if any) so the
+    -- batch can keep paying further creditors. Only invoked from
+    -- `SettlementBatch.ExecuteSettlement`.
+    choice PayOutToBank : (Optional (ContractId UsdcHolding), ContractId SettlementReceipt)
+      with
+        poolCid : ContractId UsdcHolding
+      controller visaTreasury
+      do
+        assertMsg "PayOutToBank only applies to BankReceives obligations"
+          (direction == BankReceives)
+        pool <- fetch poolCid
+        assertMsg "settlement pool must be owned by Visa Treasury"
+          (pool.owner == visaTreasury)
+        assertMsg "settlement pool is too small for this payout"
+          (pool.amount >= amount)
+        (payout, remainder) <- exercise poolCid Allocate with
+          allocateAmount = amount
+          discloseTo = []
+        _ <- exercise payout Transfer with newOwner = bank
+        receipt <- issueReceipt this
+        pure (remainder, receipt)
+
+issueReceipt : SettlementObligation -> Update (ContractId SettlementReceipt)
+issueReceipt SettlementObligation{..} = do
+  settledAt <- getTime
+  create SettlementReceipt with
+    visaTreasury; bank; direction; amount; cycleId; settledAt; regulators
+
+-- | Immutable record of a settled net position. Regulators disclosed on the
+-- obligation are carried over, so a disclosed position stays auditable after
+-- settlement; `DiscloseReceipt` covers after-the-fact disclosure.
+template SettlementReceipt
+  with
+    visaTreasury : Party
+    bank : Party
+    direction : Direction
+    amount : Decimal
+    cycleId : Text
+    settledAt : Time
+    regulators : [Party]
+  where
+    signatory visaTreasury, bank
+    observer regulators
+
+    choice DiscloseReceipt : ContractId SettlementReceipt
+      with
+        regulator : Party
+      controller visaTreasury
+      do create this with regulators = dedup (regulator :: regulators)

@@ -1,0 +1,63 @@
+-- | A deliberately simple USDC holding model.
+--
+-- This is a plain Daml template, NOT an implementation of the Canton Network
+-- token standard (CIP-56) `Holding` interfaces. It captures just enough of a
+-- stablecoin holding (issuer-signed, owner-controlled, splittable, mergeable)
+-- to demonstrate atomic multilateral net settlement.
+module Visa.Settlement.Usdc where
+
+import DA.List (dedup)
+
+-- | A USDC balance on ledger. The token issuer (e.g. Circle) is the sole
+-- signatory; the owner controls transfers. `observers` lets the owner
+-- disclose a holding to a counterparty (e.g. Visa Treasury) ahead of
+-- settlement without giving up control.
+template UsdcHolding
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+    observers : [Party]
+  where
+    signatory issuer
+    observer owner, observers
+    ensure amount > 0.0
+
+    -- | Move the full holding to a new owner. Observers are reset so the
+    -- previous counterparties stop seeing the funds once they change hands.
+    choice Transfer : ContractId UsdcHolding
+      with
+        newOwner : Party
+      controller owner
+      do create this with owner = newOwner, observers = []
+
+    -- | Carve out an exact amount, optionally disclosing the carved-out part
+    -- to additional parties. Returns (allocated part, optional remainder).
+    choice Allocate : (ContractId UsdcHolding, Optional (ContractId UsdcHolding))
+      with
+        allocateAmount : Decimal
+        discloseTo : [Party]
+      controller owner
+      do
+        assertMsg "allocation must be positive" (allocateAmount > 0.0)
+        assertMsg "insufficient funds for allocation" (allocateAmount <= amount)
+        remainder <-
+          if allocateAmount == amount
+            then pure None
+            else Some <$> create this with amount = amount - allocateAmount
+        allocated <- create this with
+          amount = allocateAmount
+          observers = dedup (discloseTo ++ observers)
+        pure (allocated, remainder)
+
+    -- | Consolidate another holding of the same issuer and owner into this one.
+    choice Merge : ContractId UsdcHolding
+      with
+        otherCid : ContractId UsdcHolding
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "can only merge holdings of the same issuer" (other.issuer == issuer)
+        assertMsg "can only merge holdings of the same owner" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount

@@ -1,0 +1,10 @@
+sdk-version: 3.5.1
+name: visa-settlement-tests
+source: daml
+version: 1.0.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../visa-settlement/.daml/dist/visa-settlement-1.0.0.dar

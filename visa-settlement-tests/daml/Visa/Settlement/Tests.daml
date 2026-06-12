@@ -1,0 +1,290 @@
+-- | Daml Script tests for the Visa multilateral net settlement model.
+--
+-- Three properties are proven:
+--
+-- 1. Inter-bank invisibility: no bank can observe another bank's net
+--    position or USDC holdings, while Visa Treasury sees every position.
+-- 2. Atomicity: batch settlement is all-or-nothing. If any leg fails, no
+--    obligation settles and no USDC moves.
+-- 3. Post-disclosure auditability: the Regulator sees nothing until Visa
+--    Treasury exercises the disclosure choices, after which the Regulator
+--    can audit positions, funding, and settlement receipts.
+module Visa.Settlement.Tests where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.List (head, sortOn)
+import DA.Optional (isSome)
+import Daml.Script
+
+import Visa.Settlement.Batch
+import Visa.Settlement.Obligation
+import Visa.Settlement.Usdc
+
+-- Test fixture ---------------------------------------------------------------
+
+data TestParties = TestParties with
+    circle : Party      -- USDC issuer
+    visa : Party        -- VisaTreasury
+    issuerA : Party     -- card-issuing bank, net debtor this cycle
+    issuerB : Party     -- card-issuing bank, net creditor this cycle
+    acquirerC : Party   -- acquiring bank, net creditor this cycle
+    regulator : Party
+
+cycle1 : Text
+cycle1 = "VISA-NET-2026-06-12-001"
+
+-- Net positions for the cycle: 1,250,000 in = 450,000 + 800,000 out.
+issuerAPays : Decimal
+issuerAPays = 1250000.0
+
+issuerBReceives : Decimal
+issuerBReceives = 450000.0
+
+acquirerCReceives : Decimal
+acquirerCReceives = 800000.0
+
+allocateParties : Script TestParties
+allocateParties = do
+  circle <- allocatePartyByHint (PartyIdHint "CircleUSDC")
+  visa <- allocatePartyByHint (PartyIdHint "VisaTreasury")
+  issuerA <- allocatePartyByHint (PartyIdHint "IssuerA")
+  issuerB <- allocatePartyByHint (PartyIdHint "IssuerB")
+  acquirerC <- allocatePartyByHint (PartyIdHint "AcquirerC")
+  regulator <- allocatePartyByHint (PartyIdHint "Regulator")
+  pure TestParties with ..
+
+-- | Visa proposes a net position; the bank countersigns.
+mkObligation
+  : Party -> Party -> Direction -> Decimal -> Text
+  -> Script (ContractId SettlementObligation)
+mkObligation visa bank direction amount cycleId = do
+  proposalCid <- submit visa $ createCmd ObligationProposal with
+    visaTreasury = visa; bank; direction; amount; cycleId
+  submit bank $ exerciseCmd proposalCid Accept
+
+-- | One fully agreed settlement cycle for all three banks.
+setupCycle
+  : Script ( TestParties
+           , ContractId SettlementObligation
+           , ContractId SettlementObligation
+           , ContractId SettlementObligation )
+setupCycle = do
+  parties@TestParties{..} <- allocateParties
+  obligationA <- mkObligation visa issuerA BankPays issuerAPays cycle1
+  obligationB <- mkObligation visa issuerB BankReceives issuerBReceives cycle1
+  obligationC <- mkObligation visa acquirerC BankReceives acquirerCReceives cycle1
+  pure (parties, obligationA, obligationB, obligationC)
+
+mint : Party -> Party -> Decimal -> Script (ContractId UsdcHolding)
+mint circle owner amount = submit circle $ createCmd UsdcHolding with
+  issuer = circle; owner; amount; observers = []
+
+-- | Total USDC a party owns, from its own point of view.
+usdcBalanceOf : Party -> Script Decimal
+usdcBalanceOf party = do
+  holdings <- query @UsdcHolding party
+  pure $ sum [holding.amount | (_, holding) <- holdings, holding.owner == party]
+
+-- | Normalize position rows for order-insensitive comparison.
+byBank : [(Party, Direction, Decimal)] -> [(Party, Direction, Decimal)]
+byBank = sortOn (\(bank, _, _) -> bank)
+
+-- 1. Inter-bank invisibility --------------------------------------------------
+
+testInterBankInvisibility : Script ()
+testInterBankInvisibility = do
+  (TestParties{..}, obligationA, obligationB, obligationC) <- setupCycle
+
+  -- Visa Treasury, counterparty to every position, sees all three.
+  visaView <- query @SettlementObligation visa
+  length visaView === 3
+
+  -- Each bank sees exactly one position: its own.
+  viewA <- query @SettlementObligation issuerA
+  map (\(_, ob) -> (ob.bank, ob.direction, ob.amount)) viewA
+    === [(issuerA, BankPays, issuerAPays)]
+  viewB <- query @SettlementObligation issuerB
+  map (\(_, ob) -> ob.bank) viewB === [issuerB]
+  viewC <- query @SettlementObligation acquirerC
+  map (\(_, ob) -> ob.bank) viewC === [acquirerC]
+
+  -- Even holding a contract id, a non-stakeholder bank resolves nothing:
+  -- IssuerA cannot read IssuerB's or AcquirerC's positions, and vice versa.
+  aReadsB <- queryContractId issuerA obligationB
+  aReadsB === None
+  aReadsC <- queryContractId issuerA obligationC
+  aReadsC === None
+  bReadsA <- queryContractId issuerB obligationA
+  bReadsA === None
+  cReadsA <- queryContractId acquirerC obligationA
+  cReadsA === None
+
+  -- Cash privacy: IssuerA's USDC is invisible to the other banks, and stays
+  -- invisible after IssuerA earmarks it for settlement (which discloses the
+  -- allocated part to Visa Treasury only).
+  holdingA <- mint circle issuerA issuerAPays
+  bReadsCash <- queryContractId issuerB holdingA
+  bReadsCash === None
+
+  _ <- submit issuerA $ exerciseCmd obligationA AllocateFunds with holdingCid = holdingA
+  visaSeesAllocation <- query @UsdcHolding visa
+  [holding.amount | (_, holding) <- visaSeesAllocation, holding.owner == issuerA]
+    === [issuerAPays]
+  bSeesCash <- query @UsdcHolding issuerB
+  bSeesCash === []
+
+-- 2. Atomicity ----------------------------------------------------------------
+
+testAtomicSettlement : Script ()
+testAtomicSettlement = do
+  (TestParties{..}, obligationA, obligationB, obligationC) <- setupCycle
+
+  holdingA <- mint circle issuerA issuerAPays
+  obligationA2 <- submit issuerA $
+    exerciseCmd obligationA AllocateFunds with holdingCid = holdingA
+
+  batchCid <- submit visa $ createCmd SettlementBatch with
+    visaTreasury = visa
+    cycleId = cycle1
+    banks = [issuerA, issuerB, acquirerC]
+
+  -- IssuerA spends its earmarked USDC out from under the settlement (a
+  -- self-transfer archives the allocated holding). The batch must now fail
+  -- as a whole: not even IssuerB's or AcquirerC's legs may settle.
+  allocations <- query @UsdcHolding visa
+  let allocatedCid = head [cid | (cid, h) <- allocations, h.owner == issuerA]
+  freshHoldingA <- submit issuerA $
+    exerciseCmd allocatedCid Transfer with newOwner = issuerA
+
+  submitMustFail visa $ exerciseCmd batchCid ExecuteSettlement with
+    obligationCids = [obligationA2, obligationB, obligationC]
+
+  -- Nothing moved, nothing settled: all three obligations are still active,
+  -- no receipts exist, and every balance is exactly as before.
+  forA_ [obligationB, obligationC] $ \cid -> do
+    stillActive <- queryContractId visa cid
+    assertMsg "obligation must survive the failed batch" (isSome stillActive)
+  obligationA2Active <- queryContractId visa obligationA2
+  assertMsg "obligation must survive the failed batch" (isSome obligationA2Active)
+  receipts <- query @SettlementReceipt visa
+  receipts === []
+  usdcBalanceOf issuerA >>= (=== issuerAPays)
+  usdcBalanceOf issuerB >>= (=== 0.0)
+  usdcBalanceOf acquirerC >>= (=== 0.0)
+  usdcBalanceOf visa >>= (=== 0.0)
+
+  -- IssuerA re-allocates honestly; the identical batch now settles all three
+  -- obligations in ONE transaction.
+  obligationA3 <- submit issuerA $
+    exerciseCmd obligationA2 AllocateFunds with holdingCid = freshHoldingA
+  settledReceipts <- submit visa $ exerciseCmd batchCid ExecuteSettlement with
+    obligationCids = [obligationA3, obligationB, obligationC]
+  length settledReceipts === 3
+
+  -- Every obligation archived, every receipt issued, money conserved:
+  -- Visa Treasury is a pure pass-through and holds nothing.
+  openObligations <- query @SettlementObligation visa
+  openObligations === []
+  receiptRows <- query @SettlementReceipt visa
+  byBank (map (\(_, r) -> (r.bank, r.direction, r.amount)) receiptRows) === byBank
+    [ (issuerA, BankPays, issuerAPays)
+    , (issuerB, BankReceives, issuerBReceives)
+    , (acquirerC, BankReceives, acquirerCReceives)
+    ]
+  usdcBalanceOf issuerA >>= (=== 0.0)
+  usdcBalanceOf issuerB >>= (=== issuerBReceives)
+  usdcBalanceOf acquirerC >>= (=== acquirerCReceives)
+  usdcBalanceOf visa >>= (=== 0.0)
+
+  -- The batch itself is consumed; the cycle cannot be settled twice.
+  batchGone <- queryContractId visa batchCid
+  batchGone === None
+
+-- 3. Post-disclosure auditability ----------------------------------------------
+
+testRegulatorAuditability : Script ()
+testRegulatorAuditability = do
+  (TestParties{..}, obligationA, obligationB, obligationC) <- setupCycle
+
+  -- Before disclosure the Regulator sees nothing at all.
+  preObligations <- query @SettlementObligation regulator
+  preObligations === []
+  preHoldings <- query @UsdcHolding regulator
+  preHoldings === []
+
+  -- Visa Treasury discloses IssuerA's and IssuerB's positions (AcquirerC's
+  -- stays private for now).
+  obligationA2 <- submit visa $
+    exerciseCmd obligationA DiscloseToRegulator with regulator
+  obligationB2 <- submit visa $
+    exerciseCmd obligationB DiscloseToRegulator with regulator
+
+  disclosed <- query @SettlementObligation regulator
+  byBank (map (\(_, ob) -> (ob.bank, ob.direction, ob.amount)) disclosed) === byBank
+    [(issuerA, BankPays, issuerAPays), (issuerB, BankReceives, issuerBReceives)]
+
+  -- Funding allocated after disclosure is auditable too: the regulator sees
+  -- the USDC earmarked against the disclosed obligation.
+  holdingA <- mint circle issuerA issuerAPays
+  obligationA3 <- submit issuerA $
+    exerciseCmd obligationA2 AllocateFunds with holdingCid = holdingA
+  auditedFunding <- query @UsdcHolding regulator
+  [(h.owner, h.amount) | (_, h) <- auditedFunding] === [(issuerA, issuerAPays)]
+
+  -- Settle the full cycle atomically.
+  batchCid <- submit visa $ createCmd SettlementBatch with
+    visaTreasury = visa
+    cycleId = cycle1
+    banks = [issuerA, issuerB, acquirerC]
+  _ <- submit visa $ exerciseCmd batchCid ExecuteSettlement with
+    obligationCids = [obligationA3, obligationB2, obligationC]
+
+  -- Disclosure survives settlement: receipts for the two disclosed positions
+  -- are visible to the Regulator; AcquirerC's receipt is not.
+  auditedReceipts <- query @SettlementReceipt regulator
+  byBank (map (\(_, r) -> (r.bank, r.direction, r.amount)) auditedReceipts) === byBank
+    [(issuerA, BankPays, issuerAPays), (issuerB, BankReceives, issuerBReceives)]
+
+  -- After-the-fact disclosure: Visa discloses AcquirerC's receipt, completing
+  -- the Regulator's audit trail for the whole cycle.
+  visaReceipts <- query @SettlementReceipt visa
+  let receiptC = head [cid | (cid, r) <- visaReceipts, r.bank == acquirerC]
+  _ <- submit visa $ exerciseCmd receiptC DiscloseReceipt with regulator
+  fullAudit <- query @SettlementReceipt regulator
+  sum (map (\(_, r) -> r.amount) fullAudit)
+    === issuerAPays + issuerBReceives + acquirerCReceives
+  length fullAudit === 3
+
+  -- The settled cash itself remains private: disclosure covered positions,
+  -- funding and receipts, not the banks' post-settlement balances.
+  postHoldings <- query @UsdcHolding regulator
+  postHoldings === []
+
+-- 4. Batch validation guards ----------------------------------------------------
+
+-- | The treasury cannot settle a partial cycle, nor one that does not net to
+-- zero.
+testBatchValidation : Script ()
+testBatchValidation = do
+  (TestParties{..}, obligationA, obligationB, obligationC) <- setupCycle
+  batchCid <- submit visa $ createCmd SettlementBatch with
+    visaTreasury = visa
+    cycleId = cycle1
+    banks = [issuerA, issuerB, acquirerC]
+
+  -- Leaving any bank's obligation out of the batch is rejected.
+  submitMustFail visa $ exerciseCmd batchCid ExecuteSettlement with
+    obligationCids = [obligationA, obligationB]
+
+  -- An unbalanced cycle (debits /= credits) is rejected outright.
+  let badCycle = "VISA-NET-UNBALANCED-999"
+  badA <- mkObligation visa issuerA BankPays 100.0 badCycle
+  badB <- mkObligation visa issuerB BankReceives 70.0 badCycle
+  badC <- mkObligation visa acquirerC BankReceives 50.0 badCycle
+  badBatch <- submit visa $ createCmd SettlementBatch with
+    visaTreasury = visa
+    cycleId = badCycle
+    banks = [issuerA, issuerB, acquirerC]
+  submitMustFail visa $ exerciseCmd badBatch ExecuteSettlement with
+    obligationCids = [badA, badB, badC]

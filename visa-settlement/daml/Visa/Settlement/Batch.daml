@@ -1,0 +1,83 @@
+-- | Atomic multilateral net settlement.
+--
+-- `ExecuteSettlement` runs the entire cycle in ONE Daml transaction:
+-- it collects USDC from every net debtor, pools it, and pays every net
+-- creditor. If any single leg fails — a missing allocation, a spent holding,
+-- a position that doesn't match — the whole transaction rolls back and no
+-- money moves anywhere. That is the atomicity the tests prove.
+module Visa.Settlement.Batch where
+
+import DA.Action (foldlA)
+import DA.List (dedup, sort)
+import DA.Optional (isNone)
+
+import Visa.Settlement.Obligation
+import Visa.Settlement.Usdc
+
+template SettlementBatch
+  with
+    visaTreasury : Party
+    cycleId : Text
+    -- | Every participant expected to settle in this cycle.
+    banks : [Party]
+  where
+    signatory visaTreasury
+    ensure not (null banks)
+
+    -- | Settle all obligations of the cycle atomically. The obligation
+    -- contract ids are passed at exercise time because allocation and
+    -- disclosure re-create obligation contracts under new ids.
+    choice ExecuteSettlement : [ContractId SettlementReceipt]
+      with
+        obligationCids : [ContractId SettlementObligation]
+      controller visaTreasury
+      do
+        obligations <- forA obligationCids $ \cid -> do
+          ob <- fetch cid
+          assertMsg "obligation belongs to a different settlement cycle"
+            (ob.cycleId == cycleId)
+          assertMsg "obligation is not against this treasury"
+            (ob.visaTreasury == visaTreasury)
+          pure (cid, ob)
+
+        -- Every bank in the batch must settle exactly one net position.
+        let coveredBanks = sort (map (\(_, ob) -> ob.bank) obligations)
+        assertMsg "batch must cover each participant bank exactly once"
+          (coveredBanks == sort (dedup banks))
+
+        -- Multilateral netting invariant: debits and credits cancel out, so
+        -- Visa Treasury is a pure pass-through and needs no float.
+        let signedAmount (_, ob) = case ob.direction of
+              BankPays -> ob.amount
+              BankReceives -> negate ob.amount
+        assertMsg "batch does not net to zero"
+          (sum (map signedAmount obligations) == 0.0)
+
+        let payers = filter (\(_, ob) -> ob.direction == BankPays) obligations
+            receivers = filter (\(_, ob) -> ob.direction == BankReceives) obligations
+
+        -- Leg 1: collect from every net debtor.
+        collected <- forA payers $ \(cid, _) -> exercise cid CollectFromBank
+
+        -- Leg 2: pool the collected USDC into a single holding.
+        poolCid <- case map fst collected of
+          [] -> abort "batch has no net debtors to fund payouts"
+          (first :: rest) ->
+            foldlA (\acc next -> exercise acc Merge with otherCid = next) first rest
+
+        -- Leg 3: pay every net creditor out of the pool.
+        (finalPool, payoutReceipts) <- foldlA
+          (\(pool, receipts) (cid, _) -> do
+            poolCid <- case pool of
+              None -> abort "settlement pool exhausted before all payouts"
+              Some p -> pure p
+            (remainder, receipt) <- exercise cid PayOutToBank with poolCid
+            pure (remainder, receipt :: receipts))
+          (Some poolCid, [])
+          receivers
+
+        -- With a zero net batch the pool is consumed exactly.
+        assertMsg "settlement pool should be empty after a zero-net batch"
+          (isNone finalPool)
+
+        pure (map snd collected ++ reverse payoutReceipts)

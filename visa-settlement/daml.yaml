@@ -1,0 +1,7 @@
+sdk-version: 3.5.1
+name: visa-settlement
+source: daml
+version: 1.0.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
