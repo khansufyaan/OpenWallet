@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visa Net Settlement on Canton — Interactive Simulator</title>
+<style>
+  :root {
+    --bg: #0d1220; --panel: #151c30; --panel2: #1b2440; --line: #2a3558;
+    --text: #e8ecf6; --muted: #93a0bf; --blue: #4f7cff; --gold: #f0b429;
+    --green: #3ecf8e; --red: #ff5d72; --purple: #b388ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { padding: 18px 24px 12px; border-bottom: 1px solid var(--line);
+           background: linear-gradient(180deg, #131a2e, var(--bg)); }
+  header h1 { margin: 0; font-size: 19px; font-weight: 650; }
+  header h1 span { color: var(--gold); }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; max-width: 980px; }
+  a { color: var(--blue); }
+  .scenarios { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .scenarios button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+                      border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+  .scenarios button:hover { border-color: var(--blue); }
+  .scenarios button.primary { background: var(--blue); border-color: var(--blue); font-weight: 600; }
+  .scenarios button.danger { border-color: #7a3344; }
+  .scenarios button.reset { margin-left: auto; color: var(--muted); }
+  main { display: grid; grid-template-columns: 1fr 380px; gap: 16px; padding: 16px 24px 40px;
+         max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .tabs button { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+                 padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .tabs button.active { color: #fff; border-color: var(--blue); background: #20305f; }
+  .tabs button .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+  .balance { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+             padding: 10px 14px; margin-bottom: 12px; display: flex; align-items: baseline; gap: 10px; }
+  .balance b { font-size: 18px; color: var(--green); }
+  .balance small { color: var(--muted); }
+  section.group { margin-bottom: 18px; }
+  section.group h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+                     color: var(--muted); margin: 0 0 8px; }
+  .empty { color: #5b6890; font-size: 13px; padding: 6px 2px; font-style: italic; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--blue);
+          border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+  .card.holding { border-left-color: var(--green); }
+  .card.proposal { border-left-color: var(--muted); }
+  .card.receipt { border-left-color: var(--gold); }
+  .card.batch { border-left-color: var(--purple); }
+  .card .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .card .cid { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .card .amt { font-weight: 700; font-size: 15px; }
+  .card .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .badge { display: inline-block; border-radius: 5px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+           margin-left: 6px; vertical-align: 1px; }
+  .badge.pays { background: #3a2030; color: var(--red); }
+  .badge.recv { background: #16322b; color: var(--green); }
+  .badge.disclosed { background: #2d2440; color: var(--purple); }
+  .badge.funded { background: #1d2c4f; color: #8fb0ff; }
+  .actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .actions button { background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+                    border-radius: 7px; padding: 5px 10px; cursor: pointer; font-size: 12.5px; }
+  .actions button:hover { border-color: var(--blue); }
+  .actions select, .formrow select, .formrow input {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 8px; font-size: 12.5px; }
+  .formbox { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px;
+             padding: 12px 14px; margin-bottom: 8px; }
+  .formbox h3 { margin: 0 0 8px; font-size: 13px; }
+  .formrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .formrow button { background: var(--blue); border: none; color: #fff; font-weight: 600;
+                    border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 12.5px; }
+  aside .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+                 padding: 12px 14px; margin-bottom: 14px; }
+  aside h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+             color: var(--muted); margin: 0 0 8px; }
+  #log { max-height: 540px; overflow-y: auto; display: flex; flex-direction: column-reverse; }
+  .logentry { border-bottom: 1px solid #1e2742; padding: 8px 2px; font-size: 12.5px; }
+  .logentry .who { color: var(--muted); font-size: 11.5px; }
+  .logentry.ok .status { color: var(--green); font-weight: 700; }
+  .logentry.fail .status { color: var(--red); font-weight: 700; }
+  .logentry .err { color: var(--red); }
+  .logentry .rollback { color: var(--gold); font-size: 11.5px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  footer { text-align: center; color: #4d5a80; padding: 18px; font-size: 12px;
+           border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Visa</span> Multilateral Net Settlement on Canton — Interactive Simulator</h1>
+  <p>
+    A faithful in-browser simulation of the <b>Daml model</b> in this repo: bilateral
+    <b>SettlementObligation</b>s between each bank and VisaTreasury, settled atomically in
+    <b>USDC</b> by one <b>SettlementBatch</b> transaction, with regulator disclosure.
+    Switch parties to experience Canton's privacy: each party sees <i>only</i> contracts it is a
+    stakeholder of. Every action is a "transaction" — if it throws, the whole thing rolls back.
+  </p>
+  <div class="scenarios">
+    <button class="primary" onclick="scenarioSetup()">1 · Setup cycle (propose + accept)</button>
+    <button onclick="scenarioFund()">2 · Mint &amp; allocate IssuerA's 1.25M</button>
+    <button onclick="scenarioSettle()">3 · Execute atomic settlement</button>
+    <button class="danger" onclick="scenarioDoubleSpend()">⚡ Atomicity demo: spend earmarked funds</button>
+    <button onclick="scenarioDisclose()">🔍 Disclose positions to Regulator</button>
+    <button class="reset" onclick="resetLedger()">↺ Reset ledger</button>
+  </div>
+</header>
+
+<main>
+  <div id="left">
+    <div class="tabs" id="tabs"></div>
+    <div class="balance" id="balance"></div>
+    <div id="forms"></div>
+    <div id="contracts"></div>
+  </div>
+  <aside>
+    <div class="panel">
+      <h2>Transaction log</h2>
+      <div id="log"></div>
+    </div>
+    <div class="panel">
+      <h2>How this maps to the Daml model</h2>
+      <p class="hint">
+        <b>UsdcHolding</b> → issuer-signed, owner-controlled token (plain template, not CIP-56).<br>
+        <b>Allocate funds</b> → carves out the exact amount and discloses it to VisaTreasury only.<br>
+        <b>Execute settlement</b> → one transaction: validate coverage + zero-net, collect from all
+        net debtors, pool, pay all net creditors. Any failure rolls back everything.<br>
+        <b>Disclose</b> → re-creates the contract with Regulator as observer, authorized by both
+        signatories.
+      </p>
+    </div>
+  </aside>
+</main>
+<footer>Simulator mirrors <code>visa-settlement/daml/Visa/Settlement/*.daml</code> — run <code>dpm test</code> for the on-ledger proofs.</footer>
+
+<script>
+"use strict";
+
+// ----- Parties ---------------------------------------------------------------
+const P = {
+  circle: "CircleUSDC", visa: "VisaTreasury", issuerA: "IssuerA",
+  issuerB: "IssuerB", acquirerC: "AcquirerC", regulator: "Regulator",
+};
+const PARTIES = [P.visa, P.issuerA, P.issuerB, P.acquirerC, P.regulator, P.circle];
+const BANKS = [P.issuerA, P.issuerB, P.acquirerC];
+const COLORS = {
+  [P.visa]: "#4f7cff", [P.issuerA]: "#ff5d72", [P.issuerB]: "#3ecf8e",
+  [P.acquirerC]: "#f0b429", [P.regulator]: "#b388ff", [P.circle]: "#6ee7ff",
+};
+const CYCLE = "VISA-NET-2026-06-12-001";
+const AMOUNTS = { [P.issuerA]: 1250000, [P.issuerB]: 450000, [P.acquirerC]: 800000 };
+
+// ----- Ledger ----------------------------------------------------------------
+let ledger, counters, logEntries, actingParty = P.visa;
+
+function resetLedger() {
+  ledger = []; counters = {}; logEntries = [];
+  log(null, "Ledger reset", "ok", "fresh ledger — no contracts");
+  render();
+}
+
+function newCid(prefix) {
+  counters[prefix] = (counters[prefix] || 0) + 1;
+  return `${prefix}-${String(counters[prefix]).padStart(3, "0")}`;
+}
+
+function create(template, payload) {
+  const prefix = { UsdcHolding: "USDC", ObligationProposal: "PROP",
+                   SettlementObligation: "OBL", SettlementReceipt: "RCPT",
+                   SettlementBatch: "BATCH" }[template];
+  const c = { cid: newCid(prefix), template, payload, archived: false };
+  ledger.push(c);
+  return c.cid;
+}
+
+function fetchActive(cid) {
+  const c = ledger.find(c => c.cid === cid);
+  if (!c) throw new Error(`contract ${cid} not found`);
+  if (c.archived) throw new Error(`contract ${cid} is archived (already consumed)`);
+  return c;
+}
+
+function archive(cid) { fetchActive(cid).archived = true; }
+
+function stakeholders(c) {
+  const p = c.payload;
+  switch (c.template) {
+    case "UsdcHolding": return [p.issuer, p.owner, ...p.observers];
+    case "ObligationProposal": return [p.visa, p.bank];
+    case "SettlementObligation":
+    case "SettlementReceipt": return [p.visa, p.bank, ...p.regulators];
+    case "SettlementBatch": return [p.visa];
+  }
+}
+
+function visible(party) {
+  return ledger.filter(c => !c.archived && stakeholders(c).includes(party));
+}
+
+// Atomic submit: run `fn` against the ledger; on throw, restore the snapshot.
+function submit(party, description, fn) {
+  const snapshot = JSON.stringify({ ledger, counters });
+  try {
+    fn();
+    log(party, description, "ok");
+  } catch (e) {
+    const s = JSON.parse(snapshot);
+    ledger = s.ledger; counters = s.counters;
+    log(party, description, "fail", e.message);
+  }
+  render();
+}
+
+// ----- Choices (mirroring the Daml templates) --------------------------------
+function mint(owner, amount) {
+  if (amount <= 0) throw new Error("ensure amount > 0.0 failed");
+  return create("UsdcHolding", { issuer: P.circle, owner, amount, observers: [] });
+}
+
+function transferHolding(actor, cid, newOwner) {
+  const c = fetchActive(cid);
+  if (c.payload.owner !== actor) throw new Error("Transfer is controlled by the owner");
+  archive(cid);
+  return create("UsdcHolding", { ...c.payload, owner: newOwner, observers: [] });
+}
+
+// Allocate: carve out exact amount, disclose carved part. Returns [allocated, remainder?]
+function allocate(actor, cid, amount, discloseTo) {
+  const c = fetchActive(cid);
+  if (c.payload.owner !== actor) throw new Error("Allocate is controlled by the owner");
+  if (amount <= 0) throw new Error("allocation must be positive");
+  if (amount > c.payload.amount) throw new Error("insufficient funds for allocation");
+  archive(cid);
+  let remainder = null;
+  if (amount < c.payload.amount)
+    remainder = create("UsdcHolding", { ...c.payload, amount: c.payload.amount - amount });
+  const observers = [...new Set([...discloseTo, ...c.payload.observers])];
+  const allocated = create("UsdcHolding", { ...c.payload, amount, observers });
+  return [allocated, remainder];
+}
+
+function proposeObligation(bank, direction, amount, cycleId) {
+  if (amount <= 0) throw new Error("ensure amount > 0.0 failed");
+  return create("ObligationProposal", { visa: P.visa, bank, direction, amount, cycleId });
+}
+
+function acceptProposal(actor, cid) {
+  const c = fetchActive(cid);
+  if (c.payload.bank !== actor) throw new Error("Accept is controlled by the bank");
+  archive(cid);
+  return create("SettlementObligation",
+    { ...c.payload, allocatedFunds: null, regulators: [] });
+}
+
+function allocateFunds(actor, obligationCid, holdingCid) {
+  const ob = fetchActive(obligationCid);
+  if (ob.payload.bank !== actor) throw new Error("AllocateFunds is controlled by the bank");
+  if (ob.payload.direction !== "BankPays")
+    throw new Error("only net-debtor (BankPays) obligations need funding");
+  const [allocated] = allocate(actor, holdingCid, ob.payload.amount,
+    [ob.payload.visa, ...ob.payload.regulators]);
+  archive(obligationCid);
+  return create("SettlementObligation", { ...ob.payload, allocatedFunds: allocated });
+}
+
+function disclose(actor, cid) {
+  const c = fetchActive(cid);
+  if (c.payload.visa !== actor) throw new Error("disclosure is controlled by VisaTreasury");
+  archive(cid);
+  const regulators = [...new Set([P.regulator, ...c.payload.regulators])];
+  return create(c.template, { ...c.payload, regulators });
+}
+
+function createBatch(cycleId, banks) {
+  return create("SettlementBatch", { visa: P.visa, cycleId, banks });
+}
+
+// The atomic settlement — one "transaction", mirrors SettlementBatch.ExecuteSettlement.
+function executeSettlement(actor, batchCid) {
+  const batch = fetchActive(batchCid);
+  if (batch.payload.visa !== actor) throw new Error("ExecuteSettlement is controlled by VisaTreasury");
+
+  const obligations = ledger.filter(c => !c.archived &&
+    c.template === "SettlementObligation" && c.payload.cycleId === batch.payload.cycleId);
+
+  const covered = obligations.map(o => o.payload.bank).sort();
+  const expected = [...new Set(batch.payload.banks)].sort();
+  if (JSON.stringify(covered) !== JSON.stringify(expected))
+    throw new Error("batch must cover each participant bank exactly once");
+
+  const net = obligations.reduce((s, o) =>
+    s + (o.payload.direction === "BankPays" ? o.payload.amount : -o.payload.amount), 0);
+  if (net !== 0) throw new Error(`batch does not net to zero (off by ${fmt(net)})`);
+
+  const payers = obligations.filter(o => o.payload.direction === "BankPays");
+  const receivers = obligations.filter(o => o.payload.direction === "BankReceives");
+
+  // Leg 1: collect from every net debtor.
+  let pool = 0;
+  for (const ob of payers) {
+    const allocCid = ob.payload.allocatedFunds;
+    if (!allocCid) throw new Error(`${ob.payload.bank} has not allocated funds`);
+    const h = fetchActive(allocCid); // throws if the bank spent it — aborts the whole batch
+    if (h.payload.owner !== ob.payload.bank)
+      throw new Error("allocated holding must belong to the bank");
+    if (h.payload.amount !== ob.payload.amount)
+      throw new Error("allocated holding must match the obligation amount");
+    archive(allocCid);
+    pool += h.payload.amount;
+    archive(ob.cid);
+    issueReceipt(ob.payload);
+  }
+
+  // Leg 2+3: pool is implicit; pay every net creditor out of it.
+  for (const ob of receivers) {
+    if (pool < ob.payload.amount) throw new Error("settlement pool exhausted before all payouts");
+    pool -= ob.payload.amount;
+    create("UsdcHolding", { issuer: P.circle, owner: ob.payload.bank,
+                            amount: ob.payload.amount, observers: [] });
+    archive(ob.cid);
+    issueReceipt(ob.payload);
+  }
+  if (pool !== 0) throw new Error("settlement pool should be empty after a zero-net batch");
+  archive(batchCid);
+}
+
+function issueReceipt(p) {
+  return create("SettlementReceipt", {
+    visa: p.visa, bank: p.bank, direction: p.direction, amount: p.amount,
+    cycleId: p.cycleId, settledAt: new Date().toISOString().slice(0, 19) + "Z",
+    regulators: p.regulators,
+  });
+}
+
+// ----- Scenario buttons --------------------------------------------------------
+function scenarioSetup() {
+  submit(P.visa, `Propose net positions for cycle ${CYCLE}`, () => {
+    proposeObligation(P.issuerA, "BankPays", AMOUNTS[P.issuerA], CYCLE);
+    proposeObligation(P.issuerB, "BankReceives", AMOUNTS[P.issuerB], CYCLE);
+    proposeObligation(P.acquirerC, "BankReceives", AMOUNTS[P.acquirerC], CYCLE);
+  });
+  for (const bank of BANKS) {
+    const prop = visible(bank).find(c => c.template === "ObligationProposal" && c.payload.bank === bank);
+    if (prop) submit(bank, `${bank} accepts net position of ${fmt(prop.payload.amount)}`,
+      () => acceptProposal(bank, prop.cid));
+  }
+}
+
+function scenarioFund() {
+  submit(P.circle, `Mint ${fmt(AMOUNTS[P.issuerA])} USDC to IssuerA`,
+    () => mint(P.issuerA, AMOUNTS[P.issuerA]));
+  const ob = visible(P.issuerA).find(c => c.template === "SettlementObligation");
+  const h = visible(P.issuerA).find(c => c.template === "UsdcHolding"
+    && c.payload.owner === P.issuerA && c.payload.amount >= (ob?.payload.amount ?? Infinity));
+  if (!ob || !h) { log(P.issuerA, "Allocate funds", "fail", "run scenario 1 first (no obligation or insufficient USDC)"); render(); return; }
+  submit(P.issuerA, "IssuerA earmarks USDC for settlement (disclosed to VisaTreasury)",
+    () => allocateFunds(P.issuerA, ob.cid, h.cid));
+}
+
+function scenarioSettle() {
+  let batch = visible(P.visa).find(c => c.template === "SettlementBatch" && c.payload.cycleId === CYCLE);
+  if (!batch) {
+    submit(P.visa, `Create settlement batch for ${CYCLE}`, () => createBatch(CYCLE, BANKS));
+    batch = visible(P.visa).find(c => c.template === "SettlementBatch" && c.payload.cycleId === CYCLE);
+  }
+  if (batch) submit(P.visa, "ExecuteSettlement — settle ALL obligations atomically",
+    () => executeSettlement(P.visa, batch.cid));
+}
+
+function scenarioDoubleSpend() {
+  const ob = ledger.find(c => !c.archived && c.template === "SettlementObligation"
+    && c.payload.bank === P.issuerA && c.payload.allocatedFunds);
+  if (!ob) { log(P.issuerA, "Double-spend demo", "fail", "run scenarios 1 and 2 first (nothing allocated yet)"); render(); return; }
+  submit(P.issuerA, "IssuerA sneakily self-transfers its EARMARKED USDC (archives the allocation)",
+    () => transferHolding(P.issuerA, ob.payload.allocatedFunds, P.issuerA));
+  scenarioSettle(); // must fail and roll back — then re-allocate honestly and retry
+  const fresh = visible(P.issuerA).find(c => c.template === "UsdcHolding"
+    && c.payload.owner === P.issuerA && c.payload.amount >= ob.payload.amount);
+  const ob2 = ledger.find(c => !c.archived && c.template === "SettlementObligation" && c.payload.bank === P.issuerA);
+  if (fresh && ob2) {
+    submit(P.issuerA, "IssuerA re-allocates honestly",
+      () => allocateFunds(P.issuerA, ob2.cid, fresh.cid));
+    scenarioSettle();
+  }
+}
+
+function scenarioDisclose() {
+  const targets = ledger.filter(c => !c.archived
+    && (c.template === "SettlementObligation" || c.template === "SettlementReceipt")
+    && !c.payload.regulators.includes(P.regulator));
+  if (!targets.length) { log(P.visa, "Disclose to Regulator", "fail", "nothing to disclose — run scenario 1 (or settle) first"); render(); return; }
+  for (const t of targets)
+    submit(P.visa, `Disclose ${t.cid} (${t.payload.bank}) to Regulator`, () => disclose(P.visa, t.cid));
+  actingParty = P.regulator;
+  render();
+}
+
+// ----- UI ----------------------------------------------------------------------
+const fmt = n => "$" + Math.abs(n).toLocaleString("en-US");
+
+function log(party, description, status, detail) {
+  logEntries.push({ party, description, status, detail, t: new Date().toLocaleTimeString() });
+}
+
+function render() {
+  // tabs
+  document.getElementById("tabs").innerHTML = PARTIES.map(p =>
+    `<button class="${p === actingParty ? "active" : ""}" onclick="actingParty='${p}';render()">
+       <span class="dot" style="background:${COLORS[p]}"></span>${p}</button>`).join("");
+
+  // balance
+  const myHoldings = visible(actingParty).filter(c =>
+    c.template === "UsdcHolding" && c.payload.owner === actingParty);
+  const bal = myHoldings.reduce((s, c) => s + c.payload.amount, 0);
+  document.getElementById("balance").innerHTML =
+    `<span>USDC owned by <b style="color:${COLORS[actingParty]}">${actingParty}</b>:</span>
+     <b>${fmt(bal)}</b> <small>(${myHoldings.length} holding${myHoldings.length === 1 ? "" : "s"})
+     — view below is exactly what ${actingParty}'s participant node sees</small>`;
+
+  // party-specific forms
+  let forms = "";
+  if (actingParty === P.circle) {
+    forms = `<div class="formbox"><h3>Mint USDC (issuer choice)</h3><div class="formrow">
+      <select id="mintOwner">${BANKS.concat(P.visa).map(b => `<option>${b}</option>`).join("")}</select>
+      <input id="mintAmt" type="number" value="1250000" style="width:120px">
+      <button onclick="submit(P.circle, 'Mint USDC to ' + mintOwner.value, () => mint(mintOwner.value, Number(mintAmt.value)))">Mint</button>
+    </div></div>`;
+  }
+  if (actingParty === P.visa) {
+    forms = `<div class="formbox"><h3>VisaTreasury operations</h3><div class="formrow">
+      <select id="propBank">${BANKS.map(b => `<option>${b}</option>`).join("")}</select>
+      <select id="propDir"><option value="BankPays">pays Visa</option><option value="BankReceives">receives from Visa</option></select>
+      <input id="propAmt" type="number" value="100000" style="width:110px">
+      <button onclick="submit(P.visa, 'Propose obligation to ' + propBank.value, () => proposeObligation(propBank.value, propDir.value, Number(propAmt.value), CYCLE))">Propose</button>
+      <button onclick="submit(P.visa, 'Create settlement batch', () => createBatch(CYCLE, BANKS))">Create batch</button>
+    </div></div>`;
+  }
+  document.getElementById("forms").innerHTML = forms;
+
+  // contracts, grouped
+  const groups = [
+    ["SettlementBatch", "Settlement batches", "batch"],
+    ["SettlementObligation", "Settlement obligations (net positions)", "obligation"],
+    ["ObligationProposal", "Obligation proposals", "proposal"],
+    ["UsdcHolding", "USDC holdings", "holding"],
+    ["SettlementReceipt", "Settlement receipts", "receipt"],
+  ];
+  document.getElementById("contracts").innerHTML = groups.map(([tpl, title, cls]) => {
+    const cs = visible(actingParty).filter(c => c.template === tpl);
+    const body = cs.length ? cs.map(c => card(c, cls)).join("")
+      : `<div class="empty">none visible to ${actingParty}</div>`;
+    return `<section class="group"><h2>${title}</h2>${body}</section>`;
+  }).join("");
+
+  // log
+  document.getElementById("log").innerHTML = logEntries.map(e => `
+    <div class="logentry ${e.status}">
+      <span class="status">${e.status === "ok" ? "✓ COMMITTED" : "✗ FAILED"}</span>
+      ${e.party ? `<span class="who">${e.t} · submitted by <b style="color:${COLORS[e.party]}">${e.party}</b></span>` : `<span class="who">${e.t}</span>`}
+      <div>${e.description}</div>
+      ${e.detail && e.status === "fail" ? `<div class="err">${e.detail}</div><div class="rollback">⤺ transaction rolled back — ledger unchanged</div>` : ""}
+      ${e.detail && e.status === "ok" ? `<div class="hint">${e.detail}</div>` : ""}
+    </div>`).join("");
+}
+
+function card(c, cls) {
+  const p = c.payload, me = actingParty;
+  let title = "", meta = "", actions = [];
+  const dirBadge = d => d === "BankPays"
+    ? `<span class="badge pays">NET DEBTOR — pays Visa</span>`
+    : `<span class="badge recv">NET CREDITOR — receives</span>`;
+
+  if (c.template === "UsdcHolding") {
+    title = `<span class="amt">${fmt(p.amount)}</span> <span class="meta">owned by <b>${p.owner}</b></span>`;
+    meta = `issuer: ${p.issuer}` + (p.observers.length ? ` · disclosed to: ${p.observers.join(", ")}` : "");
+    if (p.owner === me) {
+      const opts = PARTIES.filter(x => x !== me).map(x => `<option>${x}</option>`).join("");
+      actions.push(`<select id="to_${c.cid}">${opts}</select>
+        <button onclick="submit('${me}', 'Transfer ${c.cid} to ' + document.getElementById('to_${c.cid}').value,
+          () => transferHolding('${me}', '${c.cid}', document.getElementById('to_${c.cid}').value))">Transfer</button>`);
+    }
+  } else if (c.template === "ObligationProposal") {
+    title = `<b>${p.bank}</b> ${dirBadge(p.direction)} <span class="amt">${fmt(p.amount)}</span>`;
+    meta = `cycle: ${p.cycleId} · proposed by ${p.visa} — awaiting countersignature`;
+    if (p.bank === me)
+      actions.push(`<button onclick="submit('${me}', '${me} accepts net position', () => acceptProposal('${me}', '${c.cid}'))">Accept (countersign)</button>`);
+  } else if (c.template === "SettlementObligation") {
+    title = `<b>${p.bank}</b> ${dirBadge(p.direction)} <span class="amt">${fmt(p.amount)}</span>`
+      + (p.allocatedFunds ? `<span class="badge funded">FUNDED · ${p.allocatedFunds}</span>` : "")
+      + (p.regulators.length ? `<span class="badge disclosed">DISCLOSED</span>` : "");
+    meta = `cycle: ${p.cycleId} · signed by ${p.visa} + ${p.bank}`
+      + (p.regulators.length ? ` · observers: ${p.regulators.join(", ")}` : "");
+    if (p.bank === me && p.direction === "BankPays") {
+      const funds = visible(me).filter(x => x.template === "UsdcHolding"
+        && x.payload.owner === me && x.payload.amount >= p.amount);
+      if (funds.length) {
+        const opts = funds.map(f => `<option value="${f.cid}">${f.cid} (${fmt(f.payload.amount)})</option>`).join("");
+        actions.push(`<select id="fund_${c.cid}">${opts}</select>
+          <button onclick="submit('${me}', '${me} earmarks USDC for settlement',
+            () => allocateFunds('${me}', '${c.cid}', document.getElementById('fund_${c.cid}').value))">Allocate funds</button>`);
+      } else actions.push(`<span class="hint">no holding ≥ ${fmt(p.amount)} — ask CircleUSDC to mint</span>`);
+    }
+    if (p.visa === me && !p.regulators.includes(P.regulator))
+      actions.push(`<button onclick="submit('${me}', 'Disclose ${c.cid} to Regulator', () => disclose('${me}', '${c.cid}'))">Disclose to Regulator</button>`);
+  } else if (c.template === "SettlementReceipt") {
+    title = `<b>${p.bank}</b> settled <span class="amt">${fmt(p.amount)}</span> ${dirBadge(p.direction)}`;
+    meta = `cycle: ${p.cycleId} · at ${p.settledAt}`
+      + (p.regulators.length ? ` · observers: ${p.regulators.join(", ")}` : "");
+    if (p.visa === me && !p.regulators.includes(P.regulator))
+      actions.push(`<button onclick="submit('${me}', 'Disclose receipt ${c.cid} to Regulator', () => disclose('${me}', '${c.cid}'))">Disclose to Regulator</button>`);
+  } else if (c.template === "SettlementBatch") {
+    title = `<b>Batch ${p.cycleId}</b>`;
+    meta = `participants: ${p.banks.join(", ")} · settles atomically in one transaction`;
+    if (p.visa === me)
+      actions.push(`<button onclick="submit('${me}', 'ExecuteSettlement — all or nothing', () => executeSettlement('${me}', '${c.cid}'))">⚡ Execute settlement</button>`);
+  }
+
+  return `<div class="card ${cls}">
+    <div class="top"><div>${title}</div><span class="cid">${c.cid}</span></div>
+    <div class="meta">${meta}</div>
+    ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
+  </div>`;
+}
+
+resetLedger();
+</script>
+</body>
+</html>
