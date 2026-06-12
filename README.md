@@ -25,7 +25,7 @@ to the other banks.
 
 ```
 visa-settlement/            the model (templates only)
-  Visa.Settlement.Usdc        UsdcHolding: Transfer, Allocate, Merge
+  Visa.Settlement.Usdc        UsdcHolding (Transfer, Allocate, Merge, Send), TransferNote
   Visa.Settlement.Obligation  ObligationProposal, SettlementObligation, SettlementReceipt
   Visa.Settlement.Batch       SettlementBatch.ExecuteSettlement (the atomic settle)
 visa-settlement-tests/      Daml Script tests (separate package, per Canton docs guidance)
@@ -75,6 +75,7 @@ moves for anyone**.
 | `testInterBankInvisibility` | Each bank sees exactly its own position; `queryContractId` on another bank's obligation or USDC resolves to `None`, even with the contract id in hand. Visa sees all three. |
 | `testAtomicSettlement` | IssuerA spends its earmarked USDC out from under the batch → the whole settlement fails: all obligations remain active, zero receipts, every balance untouched. After honest re-allocation the same batch settles all three legs in one transaction, conserving money (Visa ends with 0). |
 | `testRegulatorAuditability` | Regulator sees nothing pre-disclosure; after `DiscloseToRegulator` it can audit positions and earmarked funding; disclosure survives settlement into the receipts; `DiscloseReceipt` covers after-the-fact disclosure. |
+| `testSendAndHistory` | `Send` pays with change and writes a `TransferNote` history record visible to exactly the two parties involved; overspending is rejected. |
 | `testBatchValidation` | A partial batch (missing a bank) and an unbalanced batch (debits ≠ credits) are both rejected. |
 
 ## Build & run
@@ -97,27 +98,29 @@ dpm test                         # run the Daml Script test suite
 All scripts run on the in-memory IDE ledger; no Canton node is required for
 the tests.
 
-## Live web UI (real ledger)
+## OpenWallet — live web UI (real ledger)
 
-`webapp-live/` is a browser UI connected to a **real Canton ledger** through
-the JSON Ledger API v2 — every button submits actual Daml commands, and each
-party tab shows the participant's active contract set filtered for that party
-(so the privacy you see is enforced by Canton, not the UI). To run it:
+`webapp-live/` is **OpenWallet**, a wallet-style web app connected to a
+**real Canton ledger** through the JSON Ledger API v2: connect an account,
+see your USDC balance, send to another party (with automatic UTXO
+consolidation via `Merge`), and browse payment history. History is the
+on-ledger `TransferNote` contracts created by the `UsdcHolding.Send` choice,
+so it is visible to exactly the two parties involved — privacy enforced by
+Canton, not the UI. To run it:
 
 ```bash
 # 1. start a Canton sandbox with the DARs and the JSON API enabled
 dpm sandbox --json-api-port 7575 \
-  --dar visa-settlement/.daml/dist/visa-settlement-1.0.0.dar \
-  --dar visa-settlement-tests/.daml/dist/visa-settlement-tests-1.0.0.dar
+  --dar visa-settlement/.daml/dist/visa-settlement-1.1.0.dar \
+  --dar visa-settlement-tests/.daml/dist/visa-settlement-tests-1.1.0.dar
 
 # 2. serve the UI (proxies /api/* to the JSON API, avoiding CORS)
 node server/serve.js   # http://localhost:8080
 ```
 
-The app allocates the six parties on first load. The scenario buttons walk
-through propose/accept, funding, atomic settlement, the double-spend
-atomicity demo (a genuine `CONTRACT_NOT_FOUND` rejection from Canton), and
-regulator disclosure.
+The app allocates the six parties on first load. The settlement workflow
+(propose/accept, funding, atomic batch settlement, regulator disclosure)
+remains fully covered by the Daml Script suite (`dpm test`).
 
 `webapp/` is a static, ledger-free **simulator** of the same model (suitable
 for Vercel or any static host), useful when no Canton node is available.

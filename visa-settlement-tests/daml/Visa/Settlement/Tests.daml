@@ -261,7 +261,33 @@ testRegulatorAuditability = do
   postHoldings <- query @UsdcHolding regulator
   postHoldings === []
 
--- 4. Batch validation guards ----------------------------------------------------
+-- 4. Wallet send + payment history -----------------------------------------------
+
+-- | `Send` pays an exact amount with change and records a TransferNote visible
+-- to exactly the two parties involved.
+testSendAndHistory : Script ()
+testSendAndHistory = do
+  TestParties{..} <- allocateParties
+  holding <- mint circle issuerA 1000.0
+  _ <- submit issuerA $ exerciseCmd holding Send with
+    recipient = issuerB; sendAmount = 250.0; memo = "lunch"
+  usdcBalanceOf issuerA >>= (=== 750.0)
+  usdcBalanceOf issuerB >>= (=== 250.0)
+  -- both parties hold the history record; an uninvolved party sees nothing
+  notesA <- query @TransferNote issuerA
+  map (\(_, n) -> (n.sender, n.recipient, n.amount, n.memo)) notesA
+    === [(issuerA, issuerB, 250.0, "lunch")]
+  notesB <- query @TransferNote issuerB
+  length notesB === 1
+  notesC <- query @TransferNote acquirerC
+  notesC === []
+  -- cannot send more than the holding carries
+  holdings <- query @UsdcHolding issuerA
+  let (remainderCid, _) = head [(cid, h) | (cid, h) <- holdings, h.owner == issuerA]
+  submitMustFail issuerA $ exerciseCmd remainderCid Send with
+    recipient = issuerB; sendAmount = 9999.0; memo = ""
+
+-- 5. Batch validation guards ----------------------------------------------------
 
 -- | The treasury cannot settle a partial cycle, nor one that does not net to
 -- zero.

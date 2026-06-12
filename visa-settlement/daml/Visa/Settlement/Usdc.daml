@@ -61,3 +61,36 @@ template UsdcHolding
         assertMsg "can only merge holdings of the same owner" (other.owner == owner)
         archive otherCid
         create this with amount = amount + other.amount
+
+    -- | Pay an exact amount to a recipient, keeping the change, and record a
+    -- TransferNote so both parties hold a durable payment history.
+    choice Send : (ContractId UsdcHolding, Optional (ContractId UsdcHolding))
+      with
+        recipient : Party
+        sendAmount : Decimal
+        memo : Text
+      controller owner
+      do
+        assertMsg "send amount must be positive" (sendAmount > 0.0)
+        assertMsg "insufficient funds in this holding" (sendAmount <= amount)
+        remainder <-
+          if sendAmount == amount
+            then pure None
+            else Some <$> create this with amount = amount - sendAmount
+        sent <- create this with owner = recipient, amount = sendAmount, observers = []
+        now <- getTime
+        _ <- create TransferNote with
+          sender = owner; recipient; amount = sendAmount; sentAt = now; memo
+        pure (sent, remainder)
+
+-- | Durable record of a payment, visible to exactly the two parties involved.
+template TransferNote
+  with
+    sender : Party
+    recipient : Party
+    amount : Decimal
+    sentAt : Time
+    memo : Text
+  where
+    signatory sender
+    observer recipient
