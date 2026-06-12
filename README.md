@@ -95,8 +95,32 @@ dpm test                         # run the Daml Script test suite
 ```
 
 All scripts run on the in-memory IDE ledger; no Canton node is required for
-the tests. To run against a local Canton sandbox, use `dpm sandbox` and
-`dpm script` with the built DARs.
+the tests.
+
+## Live web UI (real ledger)
+
+`webapp-live/` is a browser UI connected to a **real Canton ledger** through
+the JSON Ledger API v2 — every button submits actual Daml commands, and each
+party tab shows the participant's active contract set filtered for that party
+(so the privacy you see is enforced by Canton, not the UI). To run it:
+
+```bash
+# 1. start a Canton sandbox with the DARs and the JSON API enabled
+dpm sandbox --json-api-port 7575 \
+  --dar visa-settlement/.daml/dist/visa-settlement-1.0.0.dar \
+  --dar visa-settlement-tests/.daml/dist/visa-settlement-tests-1.0.0.dar
+
+# 2. serve the UI (proxies /api/* to the JSON API, avoiding CORS)
+node server/serve.js   # http://localhost:8080
+```
+
+The app allocates the six parties on first load. The scenario buttons walk
+through propose/accept, funding, atomic settlement, the double-spend
+atomicity demo (a genuine `CONTRACT_NOT_FOUND` rejection from Canton), and
+regulator disclosure.
+
+`webapp/` is a static, ledger-free **simulator** of the same model (suitable
+for Vercel or any static host), useful when no Canton node is available.
 
 ## Production notes
 
